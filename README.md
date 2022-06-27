@@ -1,4 +1,11 @@
 # Setup
+Instalujemy pythona. Z tej strony: https://www.python.org/downloads/release/python-380/
+
+Wybieramy `Windows x86-64 executable installer`
+
+Podczas instalacji zaznaczamy `Add Python 3.8 to PATH`
+
+Potem w CMD albo powershellu:
 `python3 -m venv operator`
 `python setup.py develop`
 
