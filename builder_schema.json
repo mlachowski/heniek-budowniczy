@@ -1,0 +1,27 @@
+{
+  "GCBARt": {
+    "count": 6,
+    "crew": 2,
+    "education": null
+  },
+  "SD": {
+    "count": 1,
+    "crew": 1,
+    "education": null
+  },
+  "SLOp": {
+    "count": 1,
+    "crew": 1,
+    "education": null
+  },
+  "SRChem": {
+    "count": 2,
+    "crew": 3,
+    "education": ["Ratownictwo chemiczne"]
+  },
+  "SDl": {
+    "count": 1,
+    "crew": 2,
+    "education": ["Szkolenie w dowodzeniu"]
+  }
+}

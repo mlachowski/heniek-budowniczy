@@ -1,6 +1,8 @@
+import configparser
 import os
 
 import click
+import unidecode
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.webdriver import WebDriver
@@ -8,7 +10,21 @@ from selenium.webdriver.common.by import By
 from webdriver_manager.chrome import ChromeDriverManager
 
 
+def get_path(file):
+    return os.path.join(
+        os.environ.get("_MEIPASS", os.path.abspath(".")),
+        file,
+    )
+
+
+def get_config():
+    config = configparser.ConfigParser()
+    config.read(get_path('config.ini'))
+    return config
+
+
 def init_and_log_in(headless: bool = True) -> WebDriver:
+    config = get_config()
     chrome_options = Options()
     if headless:
         chrome_options.add_argument("--headless")
@@ -17,10 +33,10 @@ def init_and_log_in(headless: bool = True) -> WebDriver:
     driver.get("https://www.operatorratunkowy.pl/users/sign_in")
 
     login = driver.find_element(By.XPATH, '//*[@id="user_email"]')
-    login.send_keys(os.getenv("LOGIN"))
+    login.send_keys(config['AUTH']['login'])
 
     password = driver.find_element(By.XPATH, '//*[@id="user_password"]')
-    password.send_keys(os.getenv("PASSWORD"))
+    password.send_keys(config['AUTH']['password'])
 
     driver.find_element(By.XPATH, '//*[@id="new_user"]/input').submit()
 
@@ -29,6 +45,10 @@ def init_and_log_in(headless: bool = True) -> WebDriver:
 
 def do_click(driver, element):
     driver.execute_script("arguments[0].click();", element)
+
+
+def normalize(element):
+    return unidecode.unidecode(element.text.strip())
 
 
 # Print iterations progress

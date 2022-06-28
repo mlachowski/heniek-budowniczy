@@ -9,6 +9,8 @@ setup(
         "selenium",
         "click",
         "requests",
+        "unidecode",
+        "click_config_file",
     ],
     entry_points={
         "console_scripts": [

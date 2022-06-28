@@ -1,11 +1,15 @@
 import dataclasses
 import enum
+import json
+import os
+import sys
 import time
 from copy import copy
 from typing import Optional
 
 import click
-from utils import init_and_log_in, do_click
+import click_config_file
+from utils import init_and_log_in, do_click, get_path, get_config, normalize
 from selenium.webdriver.common.by import By
 
 
@@ -79,8 +83,8 @@ def get_list_of_buildings(driver, cpr):
                     name.text.strip(),
                     cpr,
                     BuildingCategory.firehouse,
-                    int(level.text.strip()),
-                    int(crew.text.strip()),
+                    int(normalize(level)),
+                    int(normalize(crew)),
                     None,
                     None,
                     list(),
@@ -107,7 +111,7 @@ def get_building_details(driver, building):
     vehicles_parsed = list()
     for vehicle in vehicles:
         a = list(vehicle.find_elements(By.TAG_NAME, "td"))[1].find_element(By.TAG_NAME, "a")
-        vehicles_parsed.append(Vehicle(a.text.strip(), a.get_attribute("href").split("/")[-1:][0]))
+        vehicles_parsed.append(Vehicle(normalize(a), a.get_attribute("href").split("/")[-1:][0]))
     building.vehicles = vehicles_parsed
 
 
@@ -117,6 +121,7 @@ def buy_vehicles(driver, building, to_buy):
         for _ in range(0, count):
             vehicle = _find_vehicle(driver, car)
             if vehicle:
+                print(f'BUYING {car}')
                 do_click(driver, vehicle)
 
 
@@ -128,12 +133,14 @@ def get_crew_members(driver, building):
     available_crew = 0
     for crew_member in crew_members:
         name, education, assigned, state, _ = list(crew_member.find_elements(By.TAG_NAME, "td"))
+        assigned_n = normalize(assigned)
+        state_n = normalize(state)
         crew_member_parsed = CrewMember(
             name=name.text.strip(),
-            education=frozenset(education.text.strip().split(",")),
-            assigned=assigned.text.strip(),
-            state=state.text.strip(),
-            available=state.text.strip() == "Dostępne" and assigned.text.strip() == "",
+            education=frozenset(normalize(education).split(",")),
+            assigned=assigned_n,
+            state=state_n,
+            available=state_n == "Dostepne" and assigned_n == "",
         )
         crew_members_parsed.append(crew_member_parsed)
         if crew_member_parsed.available:
@@ -151,12 +158,12 @@ def _get_table_rows(driver, table_id):
 
 def _find_vehicle(driver, vehicle_name):
     for vehicle in driver.find_elements(By.CLASS_NAME, "vehicle_type"):
-        if vehicle.find_element(By.TAG_NAME, "h3").text.strip() == vehicle_name:
+        if normalize(vehicle.find_element(By.TAG_NAME, "h3")) == vehicle_name:
             return list(vehicle.find_elements(By.TAG_NAME, "a"))[1]
     do_click(driver, driver.find_element(By.XPATH, '//*[@id="tabs"]/li[2]/a'))
     time.sleep(0.2)
     for vehicle in driver.find_elements(By.CLASS_NAME, "vehicle_type"):
-        if vehicle.find_element(By.TAG_NAME, "h3").text.strip() == vehicle_name:
+        if normalize(vehicle.find_element(By.TAG_NAME, "h3")) == vehicle_name:
             return list(vehicle.find_elements(By.TAG_NAME, "a"))[1]
 
 
@@ -192,10 +199,10 @@ def assign_crew(driver, vehicle, vehicle_target_data, dry_run):
                 return
 
             _, education, state, assign = list(person.find_elements(By.TAG_NAME, "td"))
-            education = frozenset(education.text.strip().split(','))
-            state = state.text.strip()
-            assigned = assign.text.strip() != "Przydziel pojazd"
-            if education == target_education and state == "Dostępne" and not assigned:
+            education = frozenset(normalize(education).split(','))
+            state = normalize(state)
+            assigned = normalize(assign) != "Przydziel pojazd"
+            if education == target_education and state == "Dostepne" and not assigned:
                 if not dry_run:
                     do_click(driver, assign.find_element(By.TAG_NAME, "a"))
                     time.sleep(0.3)
@@ -224,7 +231,7 @@ def check_is_crew_available(building, target_to_buy, to_buy):
         if target_to_buy[car].education
     }
     for education, count in needed_crew_education.items():
-        available = sum([1 for member in building.crew_members if member.education == education])
+        available = sum([1 for member in building.crew_members if member.education == education and available])
         if available < count:
             print(f"Missing {education}. Available: {available}, needed: {count}")
             return False
@@ -241,15 +248,27 @@ VEHICLES_TO_BUY = {
 }
 
 
+def _get_builder_schema():
+    with open(get_path('builder_schema.json'), 'r') as f:
+        builder_schema_raw = json.loads(f.read())
+        return {key: VehicleTarget(**v) for key, v in builder_schema_raw.items()}
+
+
+def _get_config(file_path, cmd_name):
+    return get_config()['BUILDER']
+
+
 @click.command()
 @click.option("--cpr", "cpr", type=click.STRING)
 @click.option("--headless", "headless", default=True, type=click.BOOL)
 @click.option("--limit", "limit", default=0, type=click.INT)
 @click.option("--dry-run", "dry_run", default=False, is_flag=True, type=click.BOOL)
 @click.option("--dont-buy", "dont_buy", default=False, is_flag=True, type=click.BOOL)
-def builder(cpr, headless, limit, dry_run, dont_buy):
-    vehicles_keys = VEHICLES_TO_BUY.keys()
-
+@click.option("--dont-assign", "dont_assign", default=False, is_flag=True, type=click.BOOL)
+@click_config_file.configuration_option(provider=_get_config)
+def builder(cpr, headless, limit, dry_run, dont_buy, dont_assign):
+    builder_schema = _get_builder_schema()
+    vehicles_keys = builder_schema.keys()
     driver = init_and_log_in(headless)
     buildings = get_list_of_buildings(driver, cpr)
 
@@ -258,37 +277,46 @@ def builder(cpr, headless, limit, dry_run, dont_buy):
         buildings = buildings[:limit]
 
     for building in buildings:
+        print(f'----- WORKING ON {building.name} {building.id} -----')
         try:
             get_crew_members(driver, building)
             get_building_details(driver, building)
 
             # buy cars - check needed cars and needed crew
-            to_buy = check_what_to_buy(building, VEHICLES_TO_BUY)
-            is_crew_available = check_is_crew_available(building, VEHICLES_TO_BUY, to_buy)
+            to_buy = check_what_to_buy(building, builder_schema)
+            is_crew_available = check_is_crew_available(building, builder_schema, to_buy)
 
             if is_crew_available:
                 print("GOT REQUIRED crew", building.id, building.name)
 
                 needed_space = sum(to_buy.values())
                 if needed_space > building.free_space and not dont_buy:
-                    print("NEED MORE space", building.id, building.name)
+                    print("NEED MORE space, extending building...", building.id, building.name)
                     if not dry_run:
                         expand_building(driver, building, needed_space - building.free_space)
                 if to_buy and not dont_buy:
-                    print("WOULD like to buy", to_buy, building.name)
+                    print("WOULD like to buy...", to_buy, building.name)
                     if not dry_run:
                         buy_vehicles(driver, building, to_buy)
             else:
                 print(
-                    f"NOT ENOUGH crew",
+                    f"NOT ENOUGH crew, skipping buying new vehicles",
                     building.id,
                     building.name,
                 )
 
-            # assign crew
-            for vehicle in building.vehicles:
-                if vehicle.name in vehicles_keys:
-                    assign_crew(driver, vehicle, VEHICLES_TO_BUY[vehicle.name], dry_run)
+            if not dont_assign:
+                # get details to get new vehicles list
+                get_building_details(driver, building)
+
+                # assign crew
+                for vehicle in building.vehicles:
+                    if vehicle.name in vehicles_keys:
+                        assign_crew(driver, vehicle, builder_schema[vehicle.name], dry_run)
         except Exception as err:
-            print(err)
             print(building)
+            raise
+
+
+if getattr(sys, 'frozen', False):
+    builder(sys.argv[1:])
