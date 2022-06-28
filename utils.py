@@ -7,6 +7,7 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.webdriver import WebDriver
 from selenium.webdriver.common.by import By
+from termcolor import cprint
 from webdriver_manager.chrome import ChromeDriverManager
 
 
@@ -24,12 +25,14 @@ def get_config():
 
 
 def init_and_log_in(headless: bool = True) -> WebDriver:
+    cprint('Starting web browser...', 'cyan')
     config = get_config()
     chrome_options = Options()
     if headless:
         chrome_options.add_argument("--headless")
     driver = webdriver.Chrome(ChromeDriverManager().install(), options=chrome_options)
 
+    cprint('Trying to sign in...', 'cyan')
     driver.get("https://www.operatorratunkowy.pl/users/sign_in")
 
     login = driver.find_element(By.XPATH, '//*[@id="user_email"]')

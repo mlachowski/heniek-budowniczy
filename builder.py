@@ -9,7 +9,8 @@ from typing import Optional
 
 import click
 import click_config_file
-from utils import init_and_log_in, do_click, get_path, get_config, normalize
+from termcolor import cprint
+from utils import init_and_log_in, do_click, get_path, get_config, normalize, printProgressBar
 from selenium.webdriver.common.by import By
 
 
@@ -35,6 +36,9 @@ class Building:
     crew_members: list
     available_crew: Optional[int]
 
+    def __str__(self):
+        return f"{self.name} ({self.id})"
+
 
 @dataclasses.dataclass
 class CrewMember:
@@ -49,6 +53,9 @@ class CrewMember:
 class Vehicle:
     name: str
     id: str
+
+    def __str__(self):
+        return f"{self.name} ({self.id})"
 
 
 @dataclasses.dataclass
@@ -66,11 +73,12 @@ def get_list_of_buildings(driver, cpr):
     driver.get(f"{BUILDING_BASE_URL}{cpr}")
     do_click(driver, driver.find_element(By.XPATH, '//*[@id="tabs"]/li[4]/a'))
     time.sleep(2)
-    buildings = _get_table_rows(driver, "building_table")
+    buildings = list(_get_table_rows(driver, "building_table"))
 
     parsed_buildings = list()
-
-    for building in buildings:
+    l = len(buildings)
+    printProgressBar(0, l, prefix="Parsing buildings:", suffix="Complete", length=50)
+    for i, building in enumerate(buildings):
         building_type, name, level, _, crew, _, _ = list(building.find_elements(By.TAG_NAME, "td"))
         building_type = building_type.find_element(By.TAG_NAME, "img").get_attribute("alt")
         if building_type == "Building_fire":
@@ -92,6 +100,7 @@ def get_list_of_buildings(driver, cpr):
                     None,
                 )
             )
+        printProgressBar(i+1, l, prefix="Parsing buildings:", suffix="Complete", length=50)
 
     return parsed_buildings
 
@@ -121,7 +130,7 @@ def buy_vehicles(driver, building, to_buy):
         for _ in range(0, count):
             vehicle = _find_vehicle(driver, car)
             if vehicle:
-                print(f'BUYING {car}')
+                cprint(f'BUYING {car}', 'green')
                 do_click(driver, vehicle)
 
 
@@ -193,9 +202,10 @@ def assign_crew(driver, vehicle, vehicle_target_data, dry_run):
     if assigned < want_to_assign:
         to_assign = want_to_assign - assigned
         personal_table = _get_table_rows(driver, "personal_table")
-        print(f"WOULD LIKE to assign {to_assign}, education: {target_education}", vehicle.id, vehicle.name)
+        cprint(f"Trying to assign {to_assign}, education: {target_education}. {vehicle}", 'yellow')
         for person in personal_table:
             if to_assign <= 0:
+                cprint("Done", 'green')
                 return
 
             _, education, state, assign = list(person.find_elements(By.TAG_NAME, "td"))
@@ -207,9 +217,9 @@ def assign_crew(driver, vehicle, vehicle_target_data, dry_run):
                     do_click(driver, assign.find_element(By.TAG_NAME, "a"))
                     time.sleep(0.3)
                 to_assign -= 1
-        print('CANT assign all crew', vehicle.id, vehicle.name)
+        cprint(f'Cant assign all crew {vehicle}', 'red')
     else:
-        print("NO NEED to assign", vehicle.name, vehicle.id)
+        print(f"No need to assign {vehicle}")
 
 
 def check_is_crew_available(building, target_to_buy, to_buy):
@@ -221,35 +231,26 @@ def check_is_crew_available(building, target_to_buy, to_buy):
         ]
     )
     if building.available_crew and building.available_crew < needed_crew:
-        print(f"Missing crew. Available: {building.available_crew}, needed: {needed_crew}")
+        cprint(f"Missing crew. Available: {building.available_crew}, needed: {needed_crew}", 'red')
         return False
 
     # check education
     needed_crew_education = {
         target_to_buy[car].education_f: target_to_buy[car].crew * count
         for car, count in to_buy.items()
-        if target_to_buy[car].education
     }
     for education, count in needed_crew_education.items():
         available = sum([1 for member in building.crew_members if member.education == education and member.available])
         if available < count:
-            print(f"Missing {education}. Available: {available}, needed: {count}")
+            cprint(f"Missing {education}. Available: {available}, needed: {count}", 'red')
             return False
 
     return True
 
 
-# number of vehicles to buy, crew to assign
-VEHICLES_TO_BUY = {
-    "GCBARt": VehicleTarget(count=6, crew=2, education=None),
-    "SD": VehicleTarget(count=1, crew=1, education=None),
-    "SLOp": VehicleTarget(count=1, crew=1, education=None),
-    "SRChem": VehicleTarget(count=2, crew=3, education=['Ratownictwo chemiczne'])
-}
-
-
-def _get_builder_schema():
-    with open(get_path('builder_schema.json'), 'r') as f:
+def _get_builder_schema(builder_schema):
+    cprint('Loading builder schema...', 'cyan')
+    with open(get_path(builder_schema), 'r') as f:
         builder_schema_raw = json.loads(f.read())
         return {key: VehicleTarget(**v) for key, v in builder_schema_raw.items()}
 
@@ -265,47 +266,60 @@ def _get_config(file_path, cmd_name):
 @click.option("--dry-run", "dry_run", default=False, is_flag=True, type=click.BOOL)
 @click.option("--dont-buy", "dont_buy", default=False, is_flag=True, type=click.BOOL)
 @click.option("--dont-assign", "dont_assign", default=False, is_flag=True, type=click.BOOL)
+@click.option("--builder-schema", "builder_schema", type=click.STRING, default='builder_schema.json')
 @click_config_file.configuration_option(provider=_get_config)
-def builder(cpr, headless, limit, dry_run, dont_buy, dont_assign):
-    builder_schema = _get_builder_schema()
+def builder(cpr, headless, limit, dry_run, dont_buy, dont_assign, builder_schema):
+    builder_schema = _get_builder_schema(builder_schema)
     vehicles_keys = builder_schema.keys()
     driver = init_and_log_in(headless)
     buildings = get_list_of_buildings(driver, cpr)
 
     if limit > 0:
-        print(f"LIMIT", limit)
+        cprint(f"LIMIT setting: {limit}", 'red')
         buildings = buildings[:limit]
 
+    if dry_run:
+        cprint("Running in dry-run mode.", 'red')
+
     for building in buildings:
-        print(f'----- WORKING ON {building.name} {building.id} -----')
+        text = f'----- WORKING ON {building} -----'
+        cprint('-'*len(text), 'magenta')
+        cprint(text, 'magenta')
+        cprint('-' * len(text), 'magenta')
         try:
             get_crew_members(driver, building)
             get_building_details(driver, building)
 
             # buy cars - check needed cars and needed crew
-            to_buy = check_what_to_buy(building, builder_schema)
-            is_crew_available = check_is_crew_available(building, builder_schema, to_buy)
+            if not dont_buy:
+                cprint(f'Analyzing vehicles... {building}', 'yellow')
+                to_buy = check_what_to_buy(building, builder_schema)
+                is_crew_available = check_is_crew_available(building, builder_schema, to_buy)
 
-            if is_crew_available:
-                print("GOT REQUIRED crew", building.id, building.name)
+                if is_crew_available:
+                    cprint(f"GOT REQUIRED crew. {building}", 'green')
 
-                needed_space = sum(to_buy.values())
-                if needed_space > building.free_space and not dont_buy:
-                    print("NEED MORE space, extending building...", building.id, building.name)
-                    if not dry_run:
-                        expand_building(driver, building, needed_space - building.free_space)
-                if to_buy and not dont_buy:
-                    print("WOULD like to buy...", to_buy, building.name)
-                    if not dry_run:
-                        buy_vehicles(driver, building, to_buy)
+                    needed_space = sum(to_buy.values())
+                    if needed_space > building.free_space:
+                        cprint(f"NEED MORE space, extending building... {building}", 'yellow')
+                        if not dry_run:
+                            expand_building(driver, building, needed_space - building.free_space)
+                    if to_buy:
+                        cprint(f"GOING to buy: {to_buy} {building}", 'yellow')
+                        if not dry_run:
+                            buy_vehicles(driver, building, to_buy)
+                    else:
+                        cprint(f"Nothing to buy.", 'green')
+                else:
+                    cprint(
+                        f"NOT ENOUGH crew, skipping buying new vehicles... {building}",
+                        'red'
+                    )
             else:
-                print(
-                    f"NOT ENOUGH crew, skipping buying new vehicles",
-                    building.id,
-                    building.name,
-                )
+                cprint('Skipping vehicles checks.', 'yellow')
 
             if not dont_assign:
+                cprint(f'Assigning crew... {building}', 'yellow')
                 # get details to get new vehicles list
                 get_building_details(driver, building)
 
@@ -313,6 +327,8 @@ def builder(cpr, headless, limit, dry_run, dont_buy, dont_assign):
                 for vehicle in building.vehicles:
                     if vehicle.name in vehicles_keys:
                         assign_crew(driver, vehicle, builder_schema[vehicle.name], dry_run)
+            else:
+                cprint('Skipping assigning crew.', 'yellow')
         except Exception as err:
             print(building)
             raise

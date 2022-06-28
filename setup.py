@@ -11,6 +11,7 @@ setup(
         "requests",
         "unidecode",
         "click_config_file",
+        "termcolor",
     ],
     entry_points={
         "console_scripts": [
