@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import time
+import traceback
 from copy import copy
 from typing import Optional
 from datetime import datetime
@@ -341,12 +342,17 @@ def builder(cpr, headless, limit, dry_run, dont_buy, dont_assign, builder_schema
                         assign_crew(driver, vehicle, builder_schema[vehicle.name], dry_run)
             else:
                 cprint('Skipping assigning crew.', 'yellow')
-        except Exception:
-            driver.save_screenshot(
-                get_path(f'error_{building.id}_{datetime.now().strftime("%d%m%Y%H%M%S")}.png')
-            )
+        except Exception as err:
+            file = get_path(f'error_{building.id}_{datetime.now().strftime("%d%m%Y%H%M%S")}')
+            driver.save_screenshot(f"{file}.png")
             cprint(f"Error in {building}", 'red')
-            raise
+            cprint(str(err), 'red')
+            with open(f"{file}.txt", "w+") as f:
+                f.write(str(dataclasses.asdict(building)))
+                f.write(str(err))
+                f.write(traceback.format_exc())
+            cprint(f'Logs were saved into {file} png and txt file', 'red')
+
 
 
 if getattr(sys, 'frozen', False):
