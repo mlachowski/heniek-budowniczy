@@ -231,7 +231,7 @@ def check_is_crew_available(building, target_to_buy, to_buy):
         if target_to_buy[car].education
     }
     for education, count in needed_crew_education.items():
-        available = sum([1 for member in building.crew_members if member.education == education and available])
+        available = sum([1 for member in building.crew_members if member.education == education and member.available])
         if available < count:
             print(f"Missing {education}. Available: {available}, needed: {count}")
             return False
