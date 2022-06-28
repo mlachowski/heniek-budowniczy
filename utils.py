@@ -31,7 +31,7 @@ def init_and_log_in(headless: bool = True) -> WebDriver:
     if headless:
         chrome_options.add_argument("--headless")
     driver = webdriver.Chrome(ChromeDriverManager().install(), options=chrome_options)
-
+    driver.set_window_size(1920, 1200)
     cprint('Trying to sign in...', 'cyan')
     driver.get("https://www.operatorratunkowy.pl/users/sign_in")
 

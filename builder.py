@@ -6,6 +6,7 @@ import sys
 import time
 from copy import copy
 from typing import Optional
+from datetime import datetime
 
 import click
 import click_config_file
@@ -128,6 +129,7 @@ def buy_vehicles(driver, building, to_buy):
     driver.get(f"{BUILDING_BASE_URL}{building.id}/vehicles/new")
     for car, count in to_buy.items():
         for _ in range(0, count):
+            time.sleep(0.3)
             vehicle = _find_vehicle(driver, car)
             if vehicle:
                 cprint(f'BUYING {car}', 'green')
@@ -329,8 +331,11 @@ def builder(cpr, headless, limit, dry_run, dont_buy, dont_assign, builder_schema
                         assign_crew(driver, vehicle, builder_schema[vehicle.name], dry_run)
             else:
                 cprint('Skipping assigning crew.', 'yellow')
-        except Exception as err:
-            print(building)
+        except Exception:
+            driver.save_screenshot(
+                get_path(f'error_{building.id}_{datetime.now().strftime("%d%m%Y%H%M%S")}.png')
+            )
+            cprint(f"Error in {building}", 'red')
             raise
 
 
