@@ -6,7 +6,7 @@ import sys
 import time
 import traceback
 from copy import copy
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 import click
@@ -20,8 +20,14 @@ BUILDING_BASE_URL = "https://www.operatorratunkowy.pl/buildings/"
 VEHICLE_BASE_URL = "https://www.operatorratunkowy.pl/vehicles/"
 
 
-class BuildingCategory(enum.Enum):
-    firehouse = 0
+class BuildingCategory(str, enum.Enum):
+    OPI = "Building_polizeiwache"
+    MEDIC = "Building_rettungswache"
+    MEDIC_HELI = "Building_helipad"
+    OPI_HELI = "Building_helipad_polizei"
+    OPP = "Building_bereitschaftspolizei"
+    SM = "Building_municipal_police"
+    JRG = "Building_fire"
 
 
 @dataclasses.dataclass
@@ -60,18 +66,42 @@ class Vehicle:
         return f"{self.name} ({self.id})"
 
 
+class VehicleCategory(enum.Enum):
+    car = 0
+    trailer = 1
+    container = 2
+
+
 @dataclasses.dataclass
 class VehicleTarget:
     count: int
     crew: int
     education: Optional[list]
+    category: VehicleCategory
 
     @property
     def education_f(self):
         return frozenset(self.education or [''])
 
 
-def get_list_of_buildings(driver, cpr):
+@dataclasses.dataclass
+class Config:
+    cpr: int
+    headless: bool
+    builder_schema: str
+    dry_run: bool
+    dont_buy: bool
+    dont_assign: bool
+    start: int
+    limit: int
+    crew_min: int
+    crew_max: int
+    level_min: int
+    level_max: int
+    building_category: BuildingCategory
+
+
+def get_list_of_buildings(driver, cpr, building_category=BuildingCategory.JRG):
     driver.get(f"{BUILDING_BASE_URL}{cpr}")
     do_click(driver, driver.find_element(By.XPATH, '//*[@id="tabs"]/li[4]/a'))
     time.sleep(2)
@@ -83,7 +113,7 @@ def get_list_of_buildings(driver, cpr):
     for i, building in enumerate(buildings):
         building_type, name, level, _, crew, _, _ = list(building.find_elements(By.TAG_NAME, "td"))
         building_type = building_type.find_element(By.TAG_NAME, "img").get_attribute("alt")
-        if building_type == "Building_fire":
+        if building_type == building_category.value:
             building_id = (
                 name.find_element(By.TAG_NAME, "a").get_attribute("href").split("/")[-1:][0]
             )
@@ -92,7 +122,7 @@ def get_list_of_buildings(driver, cpr):
                     building_id,
                     name.text.strip(),
                     cpr,
-                    BuildingCategory.firehouse,
+                    building_category,
                     int(normalize(level)),
                     int(normalize(crew)),
                     None,
@@ -169,16 +199,13 @@ def _get_table_rows(driver, table_id):
 
 
 def _find_vehicle(driver, vehicle_name):
-    do_click(driver, driver.find_element(By.XPATH, '//*[@id="tabs"]/li[1]/a'))
-    time.sleep(0.2)
-    for vehicle in driver.find_elements(By.CLASS_NAME, "vehicle_type"):
-        if normalize(vehicle.find_element(By.TAG_NAME, "h3")) == vehicle_name:
-            return list(vehicle.find_elements(By.TAG_NAME, "a"))[1]
-    do_click(driver, driver.find_element(By.XPATH, '//*[@id="tabs"]/li[2]/a'))
-    time.sleep(0.2)
-    for vehicle in driver.find_elements(By.CLASS_NAME, "vehicle_type"):
-        if normalize(vehicle.find_element(By.TAG_NAME, "h3")) == vehicle_name:
-            return list(vehicle.find_elements(By.TAG_NAME, "a"))[1]
+    vehicle_tabs = driver.find_elements(By.XPATH, '//*[@id="tabs"]/li/a')
+    for tab in vehicle_tabs:
+        do_click(driver, tab)
+        time.sleep(0.2)
+        for vehicle in driver.find_elements(By.CLASS_NAME, "vehicle_type"):
+            if normalize(vehicle.find_element(By.TAG_NAME, "h3")) == vehicle_name:
+                return list(vehicle.find_elements(By.TAG_NAME, "a"))[1]
 
 
 def check_what_to_buy(building, to_buy):
@@ -199,6 +226,9 @@ def expand_building(driver, building, space):
 
 
 def assign_crew(driver, vehicle, vehicle_target_data, dry_run):
+    if vehicle_target_data.crew == 0:
+        return
+
     driver.get(f"{VEHICLE_BASE_URL}{vehicle.id}/zuweisung")
     time.sleep(0.3)
     assigned = int(driver.find_element(By.ID, "count_personal").text.strip())
@@ -228,21 +258,9 @@ def assign_crew(driver, vehicle, vehicle_target_data, dry_run):
 
 
 def check_is_crew_available(building, target_to_buy, to_buy):
-    needed_crew = sum(
-        [
-            target_to_buy[car].crew * count
-            for car, count in to_buy.items()
-            if target_to_buy[car].education is None
-        ]
-    )
-    if building.available_crew and building.available_crew < needed_crew:
-        cprint(f"Missing crew. Available: {building.available_crew}, needed: {needed_crew}", 'red')
-        return False
-
-    # check education
     needed_crew_education = {
         target_to_buy[car].education_f: target_to_buy[car].crew * count
-        for car, count in to_buy.items()
+        for car, count in to_buy.items() if target_to_buy[car].category is VehicleCategory.car
     }
     for education, count in needed_crew_education.items():
         available = sum([1 for member in building.crew_members if member.education == education and member.available])
@@ -257,7 +275,14 @@ def _get_builder_schema(builder_schema):
     cprint('Loading builder schema...', 'cyan')
     with open(get_path(builder_schema), 'r') as f:
         builder_schema_raw = json.loads(f.read())
-        return {key: VehicleTarget(**v) for key, v in builder_schema_raw.items()}
+        return {key: _get_vehicle_target(v) for key, v in builder_schema_raw.items()}
+
+
+def _get_vehicle_target(config):
+    keys = config.keys()
+    if 'category' not in keys:
+        return VehicleTarget(**config, category=VehicleCategory.car)
+    return VehicleTarget(count=config['count'], crew=0, education=None, category=VehicleCategory[config['category']])
 
 
 def _get_config(file_path, cmd_name):
@@ -283,7 +308,9 @@ def buy_needed_vehicles(driver, building, builder_schema, dry_run):
 
     cprint(f"GOT REQUIRED crew. {building}", 'green')
 
-    needed_space = sum(to_buy.values())
+    needed_space = sum([
+        count for key, count in to_buy.items() if builder_schema[key].category is not VehicleCategory.container
+    ])
     if needed_space > building.free_space:
         cprint(f"NEED MORE space, extending building... {building}", 'yellow')
         if not dry_run:
@@ -293,26 +320,57 @@ def buy_needed_vehicles(driver, building, builder_schema, dry_run):
         buy_vehicles(driver, building, to_buy)
 
 
+def filter_buildings(config: Config, buildings: List[Building]) -> List[Building]:
+    if config.start > 0:
+        cprint(f"START setting: {config.limit}", 'red')
+        buildings = buildings[config.start:]
+
+    if config.limit > 0:
+        cprint(f"LIMIT setting: {config.limit}", 'red')
+        buildings = buildings[:config.limit]
+
+    return [building for building in buildings if _can_apply_building(config, building)]
+
+
+def _can_apply_building(config: Config, building: Building) -> bool:
+    checks = []
+    if config.crew_min:
+        checks.append(building.crew >= config.crew_min)
+    if config.crew_max:
+        checks.append(building.crew <= config.crew_max)
+    if config.level_min:
+        checks.append(building.level >= config.level_min)
+    if config.level_max:
+        checks.append(building.level <= config.level_max)
+    return all(checks)
+
+
 @click.command()
 @click.option("--cpr", "cpr", type=click.STRING)
 @click.option("--headless", "headless", default=True, type=click.BOOL)
 @click.option("--limit", "limit", default=0, type=click.INT)
+@click.option("--start", "start", default=0, type=click.INT)
 @click.option("--dry-run", "dry_run", default=False, is_flag=True, type=click.BOOL)
 @click.option("--dont-buy", "dont_buy", default=False, is_flag=True, type=click.BOOL)
 @click.option("--dont-assign", "dont_assign", default=False, is_flag=True, type=click.BOOL)
 @click.option("--builder-schema", "builder_schema", type=click.STRING, default='builder_schema.json')
+@click.option("--crew-min", "crew_min", default=0, type=click.INT)
+@click.option("--crew-max", "crew_max", default=0, type=click.INT)
+@click.option("--level-min", "level_min", default=0, type=click.INT)
+@click.option("--level-max", "level_max", default=0, type=click.INT)
+@click.option("--building-category", "building_category", type=click.STRING, default='JRG')
 @click_config_file.configuration_option(provider=_get_config)
-def builder(cpr, headless, limit, dry_run, dont_buy, dont_assign, builder_schema):
-    builder_schema = _get_builder_schema(builder_schema)
+def builder(**kwargs):
+    building_category = BuildingCategory[kwargs.pop('building_category')]
+    config = Config(**kwargs, building_category=building_category)
+    builder_schema = _get_builder_schema(config.builder_schema)
     vehicles_keys = builder_schema.keys()
-    driver = init_and_log_in(headless)
-    buildings = get_list_of_buildings(driver, cpr)
+    driver = init_and_log_in(config.headless)
+    all_buildings = get_list_of_buildings(driver, config.cpr, config.building_category)
 
-    if limit > 0:
-        cprint(f"LIMIT setting: {limit}", 'red')
-        buildings = buildings[:limit]
+    buildings = filter_buildings(config, all_buildings)
 
-    if dry_run:
+    if config.dry_run:
         cprint("Running in dry-run mode.", 'red')
 
     buildings_len = len(buildings)
@@ -326,12 +384,12 @@ def builder(cpr, headless, limit, dry_run, dont_buy, dont_assign, builder_schema
             get_building_details(driver, building)
 
             # buy cars - check needed cars and needed crew
-            if not dont_buy:
-                buy_needed_vehicles(driver, building, builder_schema, dry_run)
+            if not config.dont_buy:
+                buy_needed_vehicles(driver, building, builder_schema, config.dry_run)
             else:
                 cprint('Skipping vehicles checks.', 'yellow')
 
-            if not dont_assign:
+            if not config.dont_assign:
                 cprint(f'Assigning crew... {building}', 'yellow')
                 # refresh details to get new vehicles list
                 get_building_details(driver, building)
@@ -339,7 +397,7 @@ def builder(cpr, headless, limit, dry_run, dont_buy, dont_assign, builder_schema
                 # assign crew
                 for vehicle in building.vehicles:
                     if vehicle.name in vehicles_keys:
-                        assign_crew(driver, vehicle, builder_schema[vehicle.name], dry_run)
+                        assign_crew(driver, vehicle, builder_schema[vehicle.name], config.dry_run)
             else:
                 cprint('Skipping assigning crew.', 'yellow')
         except Exception as err:

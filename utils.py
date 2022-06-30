@@ -24,12 +24,14 @@ def get_config():
     return config
 
 
-def init_and_log_in(headless: bool = True) -> WebDriver:
+def init_and_log_in(headless: bool = True, page_load: str = None) -> WebDriver:
     cprint('Starting web browser...', 'cyan')
     config = get_config()
     chrome_options = Options()
     if headless:
         chrome_options.add_argument("--headless")
+    if page_load:
+        chrome_options.page_load_strategy = page_load
     driver = webdriver.Chrome(ChromeDriverManager().install(), options=chrome_options)
     driver.set_window_size(1920, 1200)
     cprint('Trying to sign in...', 'cyan')

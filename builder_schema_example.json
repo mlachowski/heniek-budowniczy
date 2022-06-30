@@ -1,0 +1,25 @@
+{
+  "GCBARt": {
+    "count": 6,
+    "crew": 2,
+    "education": null
+  },
+  "SCKn": {
+    "count": 1,
+    "crew": 1,
+    "education": ["Ratownictwo chemiczne", "Szkolenie w dowodzeniu"]
+  },
+  "SDl": {
+    "count": 1,
+    "crew": 1,
+    "education": ["Szkolenie w dowodzeniu"]
+  },
+  "Przyczepa wielofunkcyjna": {
+    "count": 1,
+    "category": "trailer"
+  },
+  "Kontener powodziowo - pompowy": {
+    "count": 1,
+    "category": "container"
+  }
+}
