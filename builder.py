@@ -264,7 +264,8 @@ def assign_crew(driver, vehicle, vehicle_target_data, dry_run):
                     do_click(driver, assign.find_element(By.TAG_NAME, "a"))
                     time.sleep(0.3)
                 to_assign -= 1
-        cprint(f'Cant assign all crew {vehicle}', 'red')
+        if to_assign > 0:
+            cprint(f'Cant assign all crew {vehicle}', 'red')
     else:
         print(f"No need to assign {vehicle}")
 
