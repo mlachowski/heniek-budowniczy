@@ -377,18 +377,22 @@ def set_recruitment(driver, buildings: List[Building], config: Config) -> None:
         )
         if building_id in building_ids:
             if "Brak" in normalize(recruitment):
-                # do_click(driver, recruitment.find_element(By.XPATH, f'./div/a[{recruitment_level}]'))
-                time.sleep(0.3)
-                cprint(f'Recruitment level set {recruitment_level} for {name.text.strip()}', 'green')
+                cprint(f'Would like to set recruitment level {recruitment_level} for {name.text.strip()}', 'yellow')
+                if not config.dry_run:
+                    do_click(driver, recruitment.find_element(By.XPATH, f'./div/a[{recruitment_level}]'))
+                    time.sleep(0.3)
+                    cprint(f'Recruitment level set {recruitment_level} for {name.text.strip()}', 'green')
             if normalize(set_target_crew) != target_crew:
-                do_click(driver, set_target_crew.find_element(By.CLASS_NAME, 'personal_count_target_edit_button'))
-                time.sleep(0.3)
-                input = set_target_crew.find_element(By.ID, 'building_personal_count_target')
-                input.clear()
-                input.send_keys(target_crew)
-                do_click(driver, set_target_crew.find_element(By.CLASS_NAME, 'btn-success'))
-                time.sleep(0.3)
-                cprint(f'Set crew target {target_crew} for {name.text.strip()}', 'green')
+                cprint(f'Would like to set target crew {target_crew} for {name.text.strip()}', 'yellow')
+                if not config.dry_run:
+                    do_click(driver, set_target_crew.find_element(By.CLASS_NAME, 'personal_count_target_edit_button'))
+                    time.sleep(0.3)
+                    input = set_target_crew.find_element(By.ID, 'building_personal_count_target')
+                    input.clear()
+                    input.send_keys(target_crew)
+                    do_click(driver, set_target_crew.find_element(By.CLASS_NAME, 'btn-success'))
+                    time.sleep(0.3)
+                    cprint(f'Set crew target {target_crew} for {name.text.strip()}', 'green')
     cprint(f'Recruitment done', 'green')
 
 
