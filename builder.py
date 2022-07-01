@@ -5,6 +5,7 @@ import os
 import sys
 import time
 import traceback
+from configparser import ConfigParser
 from copy import copy
 from typing import Optional, List
 from datetime import datetime
@@ -88,7 +89,8 @@ class VehicleTarget:
 class Config:
     cpr: int
     headless: bool
-    builder_schema: str
+    builder_schema: dict
+    builder_schema_file: str
     dry_run: bool
     dont_buy: bool
     dont_assign: bool
@@ -98,7 +100,10 @@ class Config:
     crew_max: int
     level_min: int
     level_max: int
+    dont_recruit: bool
+    dont_build_expansions: bool
     building_category: BuildingCategory
+    ini: ConfigParser
 
 
 def get_list_of_buildings(driver, cpr, building_category=BuildingCategory.JRG):
@@ -225,6 +230,13 @@ def expand_building(driver, building, space):
         time.sleep(0.2)
 
 
+def assign_crew_to_vehicles(driver, building: Building, config: Config) -> None:
+    vehicles_keys = config.builder_schema.keys()
+    for vehicle in building.vehicles:
+        if vehicle.name in vehicles_keys:
+            assign_crew(driver, vehicle, config.builder_schema[vehicle.name], config.dry_run)
+
+
 def assign_crew(driver, vehicle, vehicle_target_data, dry_run):
     if vehicle_target_data.crew == 0:
         return
@@ -271,14 +283,14 @@ def check_is_crew_available(building, target_to_buy, to_buy):
     return True
 
 
-def _get_builder_schema(builder_schema):
+def _get_builder_schema(builder_schema: str) -> dict:
     cprint('Loading builder schema...', 'cyan')
     with open(get_path(builder_schema), 'r') as f:
         builder_schema_raw = json.loads(f.read())
         return {key: _get_vehicle_target(v) for key, v in builder_schema_raw.items()}
 
 
-def _get_vehicle_target(config):
+def _get_vehicle_target(config: dict) -> VehicleTarget:
     keys = config.keys()
     if 'category' not in keys:
         return VehicleTarget(**config, category=VehicleCategory.car)
@@ -345,6 +357,41 @@ def _can_apply_building(config: Config, building: Building) -> bool:
     return all(checks)
 
 
+def set_recruitment(driver, buildings: List[Building], config: Config) -> None:
+    cprint('Loading building list for setting recruitment...', 'yellow')
+    driver.get(f"{BUILDING_BASE_URL}{config.cpr}")
+    do_click(driver, driver.find_element(By.XPATH, '//*[@id="tabs"]/li[4]/a'))
+    time.sleep(2)
+    buildings_table = list(_get_table_rows(driver, "building_table"))
+    try:
+        recruitment_level = int(config.ini['RECRUITMENT']['duration'])
+    except ValueError:
+        recruitment_level = 4
+    target_crew = config.ini['RECRUITMENT']['target_crew']
+
+    building_ids = [building.id for building in buildings]
+    for building in buildings_table:
+        _, name, _, recruitment, _, set_target_crew, _ = list(building.find_elements(By.TAG_NAME, "td"))
+        building_id = (
+            name.find_element(By.TAG_NAME, "a").get_attribute("href").split("/")[-1:][0]
+        )
+        if building_id in building_ids:
+            if "Brak" in normalize(recruitment):
+                # do_click(driver, recruitment.find_element(By.XPATH, f'./div/a[{recruitment_level}]'))
+                time.sleep(0.3)
+                cprint(f'Recruitment level set {recruitment_level} for {name.text.strip()}', 'green')
+            if normalize(set_target_crew) != target_crew:
+                do_click(driver, set_target_crew.find_element(By.CLASS_NAME, 'personal_count_target_edit_button'))
+                time.sleep(0.3)
+                input = set_target_crew.find_element(By.ID, 'building_personal_count_target')
+                input.clear()
+                input.send_keys(target_crew)
+                do_click(driver, set_target_crew.find_element(By.CLASS_NAME, 'btn-success'))
+                time.sleep(0.3)
+                cprint(f'Set crew target {target_crew} for {name.text.strip()}', 'green')
+    cprint(f'Recruitment done', 'green')
+
+
 @click.command()
 @click.option("--cpr", "cpr", type=click.STRING)
 @click.option("--headless", "headless", default=True, type=click.BOOL)
@@ -353,6 +400,8 @@ def _can_apply_building(config: Config, building: Building) -> bool:
 @click.option("--dry-run", "dry_run", default=False, is_flag=True, type=click.BOOL)
 @click.option("--dont-buy", "dont_buy", default=False, is_flag=True, type=click.BOOL)
 @click.option("--dont-assign", "dont_assign", default=False, is_flag=True, type=click.BOOL)
+@click.option("--dont-build-expansions", "dont_build_expansions", default=False, is_flag=True, type=click.BOOL)
+@click.option("--dont-recruit", "dont_recruit", default=False, is_flag=True, type=click.BOOL)
 @click.option("--builder-schema", "builder_schema", type=click.STRING, default='builder_schema.json')
 @click.option("--crew-min", "crew_min", default=0, type=click.INT)
 @click.option("--crew-max", "crew_max", default=0, type=click.INT)
@@ -362,16 +411,29 @@ def _can_apply_building(config: Config, building: Building) -> bool:
 @click_config_file.configuration_option(provider=_get_config)
 def builder(**kwargs):
     building_category = BuildingCategory[kwargs.pop('building_category')]
-    config = Config(**kwargs, building_category=building_category)
-    builder_schema = _get_builder_schema(config.builder_schema)
-    vehicles_keys = builder_schema.keys()
+    builder_schema_file = kwargs.pop('builder_schema')
+    config = Config(
+        **kwargs,
+        building_category=building_category,
+        ini=get_config(),
+        builder_schema_file=builder_schema_file,
+        builder_schema=_get_builder_schema(builder_schema_file),
+    )
+
     driver = init_and_log_in(config.headless)
     all_buildings = get_list_of_buildings(driver, config.cpr, config.building_category)
+    cprint(f'Loaded {len(all_buildings)} of type {config.building_category.name}', 'green')
 
     buildings = filter_buildings(config, all_buildings)
+    cprint(f'Filtered buildings {len(buildings)}', 'green')
 
     if config.dry_run:
         cprint("Running in dry-run mode.", 'red')
+
+    if not config.dont_recruit:
+        set_recruitment(driver, buildings, config)
+    else:
+        cprint('Skipping recruitment process.', 'yellow')
 
     buildings_len = len(buildings)
     for i, building in enumerate(buildings, start=1):
@@ -385,7 +447,7 @@ def builder(**kwargs):
 
             # buy cars - check needed cars and needed crew
             if not config.dont_buy:
-                buy_needed_vehicles(driver, building, builder_schema, config.dry_run)
+                buy_needed_vehicles(driver, building, config.builder_schema, config.dry_run)
             else:
                 cprint('Skipping vehicles checks.', 'yellow')
 
@@ -395,9 +457,7 @@ def builder(**kwargs):
                 get_building_details(driver, building)
 
                 # assign crew
-                for vehicle in building.vehicles:
-                    if vehicle.name in vehicles_keys:
-                        assign_crew(driver, vehicle, builder_schema[vehicle.name], config.dry_run)
+                assign_crew_to_vehicles(driver, building, config)
             else:
                 cprint('Skipping assigning crew.', 'yellow')
         except Exception as err:
