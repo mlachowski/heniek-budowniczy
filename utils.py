@@ -56,6 +56,15 @@ def normalize(element):
     return unidecode.unidecode(element.text.strip())
 
 
+def get_table_rows(driver, table_id=None, class_name=None):
+    if table_id:
+        table = driver.find_element(By.ID, table_id)
+    else:
+        table = driver.find_element(By.CLASS_NAME, class_name)
+    table = table.find_element(By.TAG_NAME, "tbody")
+    return table.find_elements(By.TAG_NAME, "tr")
+
+
 # Print iterations progress
 def printProgressBar(
     iteration, total, prefix="", suffix="", decimals=1, length=100, fill="█", printEnd="\r"

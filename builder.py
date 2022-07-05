@@ -12,105 +12,20 @@ from datetime import datetime
 
 import click
 import click_config_file
+from build_expansions import build_expansions
+from builder_const import BuildingCategory, Building, CrewMember, Vehicle, VehicleCategory, VehicleTarget, Config, \
+    BUILDING_BASE_URL, VEHICLE_BASE_URL
 from termcolor import cprint
-from utils import init_and_log_in, do_click, get_path, get_config, normalize, printProgressBar
+from utils import init_and_log_in, do_click, get_path, get_config, normalize, printProgressBar, get_table_rows
 from selenium.webdriver.common.by import By
 
-
-BUILDING_BASE_URL = "https://www.operatorratunkowy.pl/buildings/"
-VEHICLE_BASE_URL = "https://www.operatorratunkowy.pl/vehicles/"
-
-
-class BuildingCategory(str, enum.Enum):
-    OPI = "Building_polizeiwache"
-    MEDIC = "Building_rettungswache"
-    MEDIC_HELI = "Building_helipad"
-    OPI_HELI = "Building_helipad_polizei"
-    OPP = "Building_bereitschaftspolizei"
-    SM = "Building_municipal_police"
-    JRG = "Building_fire"
-
-
-@dataclasses.dataclass
-class Building:
-    id: str
-    name: str
-    cpr: str
-    category: BuildingCategory
-    level: int
-    crew: int
-    free_space: Optional[int]
-    vehicles_number: Optional[int]
-    vehicles: list
-    crew_members: list
-    available_crew: Optional[int]
-
-    def __str__(self):
-        return f"{self.name} ({self.id})"
-
-
-@dataclasses.dataclass
-class CrewMember:
-    name: str
-    education: frozenset
-    assigned: str
-    state: str
-    available: bool
-
-
-@dataclasses.dataclass
-class Vehicle:
-    name: str
-    id: str
-
-    def __str__(self):
-        return f"{self.name} ({self.id})"
-
-
-class VehicleCategory(enum.Enum):
-    car = 0
-    trailer = 1
-    container = 2
-
-
-@dataclasses.dataclass
-class VehicleTarget:
-    count: int
-    crew: int
-    education: Optional[list]
-    category: VehicleCategory
-
-    @property
-    def education_f(self):
-        return frozenset(self.education or [''])
-
-
-@dataclasses.dataclass
-class Config:
-    cpr: int
-    headless: bool
-    builder_schema: dict
-    builder_schema_file: str
-    dry_run: bool
-    dont_buy: bool
-    dont_assign: bool
-    start: int
-    limit: int
-    crew_min: int
-    crew_max: int
-    level_min: int
-    level_max: int
-    dont_recruit: bool
-    dont_build_expansions: bool
-    building_category: BuildingCategory
-    ini: ConfigParser
 
 
 def get_list_of_buildings(driver, cpr, building_category=BuildingCategory.JRG):
     driver.get(f"{BUILDING_BASE_URL}{cpr}")
     do_click(driver, driver.find_element(By.XPATH, '//*[@id="tabs"]/li[4]/a'))
     time.sleep(2)
-    buildings = list(_get_table_rows(driver, "building_table"))
+    buildings = list(get_table_rows(driver, "building_table"))
 
     parsed_buildings = list()
     l = len(buildings)
@@ -153,7 +68,7 @@ def get_building_details(driver, building):
     building.free_space = space_available - space_taken
     building.vehicles_number = space_taken
 
-    vehicles = _get_table_rows(driver, "vehicle_table")
+    vehicles = get_table_rows(driver, "vehicle_table")
     vehicles_parsed = list()
     for vehicle in vehicles:
         a = list(vehicle.find_elements(By.TAG_NAME, "td"))[1].find_element(By.TAG_NAME, "a")
@@ -175,7 +90,7 @@ def buy_vehicles(driver, building, to_buy):
 def get_crew_members(driver, building):
     driver.get(f"{BUILDING_BASE_URL}{building.id}/personals")
 
-    crew_members = _get_table_rows(driver, "personal_table")
+    crew_members = get_table_rows(driver, "personal_table")
     crew_members_parsed = list()
     available_crew = 0
     for crew_member in crew_members:
@@ -196,11 +111,6 @@ def get_crew_members(driver, building):
     building.crew_members = crew_members_parsed
     building.available_crew = available_crew
     return crew_members_parsed
-
-
-def _get_table_rows(driver, table_id):
-    table = driver.find_element(By.ID, table_id).find_element(By.TAG_NAME, "tbody")
-    return table.find_elements(By.TAG_NAME, "tr")
 
 
 def _find_vehicle(driver, vehicle_name):
@@ -248,7 +158,7 @@ def assign_crew(driver, vehicle, vehicle_target_data, dry_run):
     target_education = vehicle_target_data.education_f
     if assigned < want_to_assign:
         to_assign = want_to_assign - assigned
-        personal_table = _get_table_rows(driver, "personal_table")
+        personal_table = get_table_rows(driver, "personal_table")
         cprint(f"Trying to assign {to_assign}, education: {target_education}. {vehicle}", 'yellow')
         for person in personal_table:
             if to_assign <= 0:
@@ -363,7 +273,7 @@ def set_recruitment(driver, buildings: List[Building], config: Config) -> None:
     driver.get(f"{BUILDING_BASE_URL}{config.cpr}")
     do_click(driver, driver.find_element(By.XPATH, '//*[@id="tabs"]/li[4]/a'))
     time.sleep(2)
-    buildings_table = list(_get_table_rows(driver, "building_table"))
+    buildings_table = list(get_table_rows(driver, "building_table"))
     try:
         recruitment_level = int(config.ini['RECRUITMENT']['duration'])
     except ValueError:
@@ -465,6 +375,12 @@ def builder(**kwargs):
                 assign_crew_to_vehicles(driver, building, config)
             else:
                 cprint('Skipping assigning crew.', 'yellow')
+
+            if not config.dont_build_expansions:
+                cprint(f'Analyzing expansions... {building}', 'yellow')
+                build_expansions(driver, building, config)
+            else:
+                cprint('Skipping building expansion.', 'yellow')
         except Exception as err:
             file = get_path(f'error_{building.id}_{datetime.now().strftime("%d%m%Y%H%M%S")}')
             driver.save_screenshot(f"{file}.png")
@@ -475,7 +391,6 @@ def builder(**kwargs):
                 f.write(str(err))
                 f.write(traceback.format_exc())
             cprint(f'Logs were saved into {file} png and txt file', 'red')
-
 
 
 if getattr(sys, 'frozen', False):
