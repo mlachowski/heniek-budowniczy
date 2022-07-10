@@ -7,7 +7,7 @@ import time
 import traceback
 from configparser import ConfigParser
 from copy import copy
-from typing import Optional, List
+from typing import Optional, List, Tuple
 from datetime import datetime
 
 import click
@@ -18,7 +18,6 @@ from builder_const import BuildingCategory, Building, CrewMember, Vehicle, Vehic
 from termcolor import cprint
 from utils import init_and_log_in, do_click, get_path, get_config, normalize, printProgressBar, get_table_rows
 from selenium.webdriver.common.by import By
-
 
 
 def get_list_of_buildings(driver, cpr, building_category=BuildingCategory.JRG):
@@ -180,18 +179,26 @@ def assign_crew(driver, vehicle, vehicle_target_data, dry_run):
         print(f"No need to assign {vehicle}")
 
 
-def check_is_crew_available(building, target_to_buy, to_buy):
-    needed_crew_education = {
-        target_to_buy[car].education_f: target_to_buy[car].crew * count
-        for car, count in to_buy.items() if target_to_buy[car].category is VehicleCategory.car
-    }
+def check_is_crew_available(building: Building, target_to_buy, to_buy) -> Tuple[bool, set]:
+    needed_crew_education = {}
+    for car, count in to_buy.items():
+        if target_to_buy[car].category is VehicleCategory.car:
+            education_key = target_to_buy[car].education_f
+            needed_crew_education[education_key] = needed_crew_education.get(education_key, 0) + target_to_buy[car].crew * count
+
+    needed_crew_education_names = set(needed_crew_education.keys())
+    not_available_crew = set()
     for education, count in needed_crew_education.items():
         available = sum([1 for member in building.crew_members if member.education == education and member.available])
         if available < count:
             cprint(f"Missing {education}. Available: {available}, needed: {count}", 'red')
-            return False
+            not_available_crew.add(education)
+        else:
+            cprint(f"Got {education}. Available: {available}, needed: {count}", 'green')
 
-    return True
+    available_crew_education = needed_crew_education_names - not_available_crew
+    all_present = needed_crew_education_names == available_crew_education
+    return all_present, available_crew_education
 
 
 def _get_builder_schema(builder_schema: str) -> dict:
@@ -212,6 +219,14 @@ def _get_config(file_path, cmd_name):
     return get_config()['BUILDER']
 
 
+def filter_to_buy_by_available_education(
+        available_education: set, target_to_buy: dict, to_buy: dict,
+) -> dict:
+    return {
+        car: count for car, count in to_buy.items() if target_to_buy[car].education_f in available_education
+    }
+
+
 def buy_needed_vehicles(driver, building, builder_schema, dry_run):
     cprint(f'Analyzing vehicles... {building}', 'yellow')
     to_buy = check_what_to_buy(building, builder_schema)
@@ -221,20 +236,29 @@ def buy_needed_vehicles(driver, building, builder_schema, dry_run):
         return
     cprint(f"NEED to buy: {to_buy} {building}", 'yellow')
 
-    is_crew_available = check_is_crew_available(building, builder_schema, to_buy)
-    if not is_crew_available:
+    is_crew_available, available_education = check_is_crew_available(
+        building, builder_schema, to_buy,
+    )
+    if not available_education:
         cprint(
             f"NOT ENOUGH crew, skipping buying new vehicles... {building}",
             'red'
         )
         return
-
-    cprint(f"GOT REQUIRED crew. {building}", 'green')
+    if is_crew_available:
+        cprint(f"Got all required crew. {building}", 'green')
+    else:
+        cprint(f"Available education: {available_education}", 'yellow')
+        to_buy = filter_to_buy_by_available_education(available_education, builder_schema, to_buy)
+        cprint(f"Will perform partial buying: {to_buy} {building}", 'yellow')
 
     needed_space = sum([
         count for key, count in to_buy.items() if builder_schema[key].category is not VehicleCategory.container
     ])
-    if needed_space > building.free_space:
+    free_space = building.free_space
+    if building.category is BuildingCategory.OPI:
+        free_space -= 3
+    if needed_space > free_space:
         cprint(f"NEED MORE space, extending building... {building}", 'yellow')
         if not dry_run:
             expand_building(driver, building, needed_space - building.free_space)
@@ -244,15 +268,17 @@ def buy_needed_vehicles(driver, building, builder_schema, dry_run):
 
 
 def filter_buildings(config: Config, buildings: List[Building]) -> List[Building]:
+    new_buildings = [building for building in buildings if _can_apply_building(config, building)]
+    
     if config.start > 0:
-        cprint(f"START setting: {config.limit}", 'red')
-        buildings = buildings[config.start:]
+        cprint(f"START setting: {config.start}", 'red')
+        new_buildings = new_buildings[config.start:]
 
     if config.limit > 0:
         cprint(f"LIMIT setting: {config.limit}", 'red')
-        buildings = buildings[:config.limit]
+        new_buildings = new_buildings[:config.limit]
 
-    return [building for building in buildings if _can_apply_building(config, building)]
+    return new_buildings
 
 
 def _can_apply_building(config: Config, building: Building) -> bool:
@@ -296,14 +322,18 @@ def set_recruitment(driver, buildings: List[Building], config: Config) -> None:
             if normalize(set_target_crew) != target_crew:
                 cprint(f'Would like to set target crew {target_crew} for {name.text.strip()}', 'yellow')
                 if not config.dry_run:
-                    do_click(driver, set_target_crew.find_element(By.CLASS_NAME, 'personal_count_target_edit_button'))
-                    time.sleep(0.3)
-                    input = set_target_crew.find_element(By.ID, 'building_personal_count_target')
-                    input.clear()
-                    input.send_keys(target_crew)
-                    do_click(driver, set_target_crew.find_element(By.CLASS_NAME, 'btn-success'))
-                    time.sleep(0.3)
-                    cprint(f'Set crew target {target_crew} for {name.text.strip()}', 'green')
+                    try:
+                        do_click(driver, set_target_crew.find_element(By.CLASS_NAME, 'personal_count_target_edit_button'))
+                        time.sleep(0.3)
+                        input = set_target_crew.find_element(By.ID, 'building_personal_count_target')
+                        input.clear()
+                        input.send_keys(target_crew)
+                        do_click(driver, set_target_crew.find_element(By.CLASS_NAME, 'btn-success'))
+                        time.sleep(0.3)
+                        cprint(f'Set crew target {target_crew} for {name.text.strip()}', 'green')
+                    except Exception:
+                        driver.save_screenshot(f"recruitment_error.png")
+                        raise
     cprint(f'Recruitment done', 'green')
 
 
@@ -352,7 +382,7 @@ def builder(**kwargs):
 
     buildings_len = len(buildings)
     for i, building in enumerate(buildings, start=1):
-        text = f'----- WORKING ON {building} {i} of {buildings_len} -----'
+        text = f'----- WORKING ON {building} crew: {building.crew}, {i} of {buildings_len} -----'
         cprint('-'*len(text), 'magenta')
         cprint(text, 'magenta')
         cprint('-' * len(text), 'magenta')

@@ -4,6 +4,7 @@ import os
 import click
 import unidecode
 from selenium import webdriver
+from selenium.common import NoSuchElementException
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.webdriver import WebDriver
 from selenium.webdriver.common.by import By
@@ -57,12 +58,15 @@ def normalize(element):
 
 
 def get_table_rows(driver, table_id=None, class_name=None):
-    if table_id:
-        table = driver.find_element(By.ID, table_id)
-    else:
-        table = driver.find_element(By.CLASS_NAME, class_name)
-    table = table.find_element(By.TAG_NAME, "tbody")
-    return table.find_elements(By.TAG_NAME, "tr")
+    try:
+        if table_id:
+            table = driver.find_element(By.ID, table_id)
+        else:
+            table = driver.find_element(By.CLASS_NAME, class_name)
+        table = table.find_element(By.TAG_NAME, "tbody")
+        return table.find_elements(By.TAG_NAME, "tr")
+    except NoSuchElementException as err:
+        return []
 
 
 # Print iterations progress
@@ -102,3 +106,14 @@ class RangeType(click.ParamType):
             return parse_credits(min_credits), parse_credits(max_credits)
         except Exception:
             self.fail("Please provide valid range: 0-20k or 10-100 or different", param, ctx)
+
+
+class TimeRangeType(click.ParamType):
+    name = "time-range"
+
+    def convert(self, value, param, ctx):
+        print(value)
+        if value and '-' in value:
+            sleep_from, sleep_to = tuple(value.split('-'))
+            return int(sleep_from), int(sleep_to)
+        return None, None

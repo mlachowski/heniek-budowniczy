@@ -113,6 +113,7 @@ def queue_expansions(driver: WebDriver, to_build: dict) -> bool:
     for row in rows:
         name, _, _, actions = row.find_elements(By.TAG_NAME, 'td')
         expansion = _get_expansion(name)
+        print(name, expansion)
         if not expansion:
             continue
 
