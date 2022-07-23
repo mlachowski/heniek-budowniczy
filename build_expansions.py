@@ -38,7 +38,11 @@ def build_expansions(driver: WebDriver, building: Building, config: Config) -> N
     expansions_target_raw = config.ini[building.category.name]
     expansions_target = {k: _get_expansion_target_value(v) for k, v in expansions_target_raw.items()}
 
-    do_click(driver, driver.find_element(By.XPATH, '//*[@id="tabs"]/li[2]/a'))
+    expansion_tab = driver.find_element(By.XPATH, '//*[@id="tabs"]/li[2]/a')
+    if expansion_tab.get_attribute('href').endswith('#building_complex'):
+        cprint("No expansions on this type of building.", 'yellow')
+        return
+    do_click(driver, expansion_tab)
     time.sleep(0.3)
 
     current_expansions = get_expansions_status(driver)
@@ -63,9 +67,10 @@ def _get_expansion_target_value(value: str) -> int:
 def _get_expansion(name: WebElement) -> Optional[Expansions]:
     with suppress(ValueError):
         parsed = name.find_element(By.TAG_NAME, 'b').get_attribute('innerHTML').strip()
-        expansions = Expansions(parsed)
-        if expansions == Expansions.prison_cell_n or expansions == expansions.prison_cell_1:
+        expansion = Expansions(parsed)
+        if expansion == Expansions.prison_cell_n or expansion == Expansions.prison_cell_1:
             return Expansions.prison_cells
+        return expansion
     return None
 
 
@@ -113,12 +118,11 @@ def queue_expansions(driver: WebDriver, to_build: dict) -> bool:
     for row in rows:
         name, _, _, actions = row.find_elements(By.TAG_NAME, 'td')
         expansion = _get_expansion(name)
-        print(name, expansion)
+        print(name.text, expansion)
         if not expansion:
             continue
 
         expansion_status = _get_status(actions)
-        print(expansion_status, to_build.get(expansion.name), actions.text)
         if expansion_status is ExpansionStatus.to_build and to_build.get(expansion.name, 0) > 0:
             to_build[expansion.name] = to_build[expansion.name] - 1
             do_click(driver, actions.find_element(By.TAG_NAME, 'a'))
