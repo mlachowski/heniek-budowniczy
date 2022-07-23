@@ -114,12 +114,27 @@ def get_crew_members(driver, building):
 
 def _find_vehicle(driver, vehicle_name):
     vehicle_tabs = driver.find_elements(By.XPATH, '//*[@id="tabs"]/li/a')
+
+    if len(vehicle_tabs) == 0:
+        return _find_vehicle_on_tab(driver, vehicle_name)
+
     for tab in vehicle_tabs:
         do_click(driver, tab)
         time.sleep(0.2)
-        for vehicle in driver.find_elements(By.CLASS_NAME, "vehicle_type"):
-            if normalize(vehicle.find_element(By.TAG_NAME, "h3")) == vehicle_name:
+        vehicle = _find_vehicle_on_tab(driver, vehicle_name)
+        if vehicle:
+            return vehicle
+
+    return None
+
+
+def _find_vehicle_on_tab(driver, vehicle_name):
+    for vehicle in driver.find_elements(By.CLASS_NAME, "vehicle_type"):
+        if normalize(vehicle.find_element(By.TAG_NAME, "h3")) == vehicle_name:
+            try:
                 return list(vehicle.find_elements(By.TAG_NAME, "a"))[1]
+            except IndexError:
+                cprint('No vehicle "buy" button found. No money or place.', 'red')
 
 
 def check_what_to_buy(building, to_buy):
@@ -133,7 +148,7 @@ def check_what_to_buy(building, to_buy):
     return {k: c for k, c in missing.items() if c > 0}
 
 
-def expand_building(driver, building, space):
+def expand_building(driver, building: Building, space):
     for _ in range(0, space):
         driver.get(f"{BUILDING_BASE_URL}{building.id}/expand_do/credits")
         time.sleep(0.2)
@@ -307,6 +322,7 @@ def set_recruitment(driver, buildings: List[Building], config: Config) -> None:
     target_crew = config.ini['RECRUITMENT']['target_crew']
 
     building_ids = [building.id for building in buildings]
+    visit_urls = []
     for building in buildings_table:
         _, name, _, recruitment, _, set_target_crew, _ = list(building.find_elements(By.TAG_NAME, "td"))
         building_id = (
@@ -316,8 +332,12 @@ def set_recruitment(driver, buildings: List[Building], config: Config) -> None:
             if "Brak" in normalize(recruitment):
                 cprint(f'Would like to set recruitment level {recruitment_level} for {name.text.strip()}', 'yellow')
                 if not config.dry_run:
-                    do_click(driver, recruitment.find_element(By.XPATH, f'./div/a[{recruitment_level}]'))
-                    time.sleep(0.3)
+                    if recruitment_level == 4:
+                        do_click(driver, recruitment.find_element(By.XPATH, f'./div/a[{recruitment_level}]'))
+                        time.sleep(0.3)
+                    else:
+                        visit_urls.append(f"{BUILDING_BASE_URL}{building_id}/hire_do/{recruitment_level}")
+                        time.sleep(1)
                     cprint(f'Recruitment level set {recruitment_level} for {name.text.strip()}', 'green')
             if normalize(set_target_crew) != target_crew:
                 cprint(f'Would like to set target crew {target_crew} for {name.text.strip()}', 'yellow')
@@ -334,6 +354,9 @@ def set_recruitment(driver, buildings: List[Building], config: Config) -> None:
                     except Exception:
                         driver.save_screenshot(f"recruitment_error.png")
                         raise
+    for url in visit_urls:
+        driver.get(url)
+        time.sleep(1)
     cprint(f'Recruitment done', 'green')
 
 
